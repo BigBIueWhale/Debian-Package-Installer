@@ -71,14 +71,3 @@ python debian-package-installer.py ffmpeg
 - If multiple versions of a package are found, the script chooses the highest lexicographical match.
 - Network errors during downloads might require restarting the script.
 
-## License
-
-This project is licensed under the MIT License.
-
-## Contributing
-
-Feel free to contribute by submitting issues or creating pull requests.
-
-## Contact
-
-For any queries or feedback, please contact the project maintainer.
