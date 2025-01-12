@@ -29,10 +29,10 @@ This project is a Python-based tool for downloading Debian packages along with t
    ```
 
 3. Ensure the `debs/` directory contains valid repository text files:
-   - `universe.txt`
-   - `main.txt`
-   - `multiverse.txt`
-   - `restricted.txt`
+   - `universe.txt`: https://us.archive.ubuntu.com/ubuntu/ubuntu/dists/noble/universe/binary-amd64/Packages.gz
+   - `main.txt`: https://us.archive.ubuntu.com/ubuntu/ubuntu/dists/noble/main/binary-amd64/Packages.gz
+   - `multiverse.txt`: https://us.archive.ubuntu.com/ubuntu/ubuntu/dists/noble/multiverse/binary-amd64/Packages.gz
+   - `restricted.txt`: https://us.archive.ubuntu.com/ubuntu/ubuntu/dists/noble/restricted/binary-amd64/Packages.gz
 
 ## Usage
 
