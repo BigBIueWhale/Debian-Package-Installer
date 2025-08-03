@@ -1,4 +1,4 @@
-# Debian Package Downloader with Dependency Resolution
+# Debian Package Installer
 
 This project provides a set of Python tools to download Debian packages and their dependencies from the official Ubuntu repositories.
 
@@ -20,6 +20,14 @@ You can install the required Python libraries using pip:
 ```bash
 python3 -m pip install python-debian requests
 ```
+
+## Compare to Alternatives
+
+- **apt-offline**- only downloads the missing packages, not very robust indeed.
+
+- **apt-rdepends**- will cause catastrophic failure when reaching a package name alias.
+
+- **Debian Package Installer**- This project works even when running on a different Linux version and/or architecture than the one we're downloading for, and this project downloads **all** dependencies, regardless of whether you happen to have them installed.
 
 ## Usage
 
