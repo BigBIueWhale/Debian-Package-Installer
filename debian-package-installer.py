@@ -1,19 +1,17 @@
-# debian-package-installer.py
 import os
 import requests
 from debian.debfile import DebFile
+from debian.debian_support import Version
 from typing import Set, List
 import argparse
 
-# This URL is now for constructing the final .deb download path
-BASE_DOWNLOAD_URL = "https://archive.ubuntu.com/ubuntu" 
 DOWNLOAD_DIR = "./downloaded/"
 REPO_DIR = "./repository"
 
 if not os.path.exists(DOWNLOAD_DIR):
     os.makedirs(DOWNLOAD_DIR)
 
-def parse_urls_from_text(file_path: str) -> List[str]:
+def parse_urls_from_text(file_path: str, base_download_url: str) -> List[str]:
     """Parses a repository 'Packages' file to extract relative package paths."""
     urls = []
     try:
@@ -22,7 +20,7 @@ def parse_urls_from_text(file_path: str) -> List[str]:
                 if line.startswith("Filename: "):
                     # The filename is a relative path like 'pool/universe/f/ffmpeg/ffmpeg_...deb'
                     relative_path = line.split("Filename: ")[1].strip()
-                    urls.append(f"{BASE_DOWNLOAD_URL}/{relative_path}")
+                    urls.append(f"{base_download_url}/{relative_path}")
     except FileNotFoundError:
         # This case should be handled by load_all_urls, but is here for safety.
         print(f"Error: Repository file not found: {file_path}")
@@ -30,7 +28,7 @@ def parse_urls_from_text(file_path: str) -> List[str]:
         print(f"Error reading or parsing file {file_path}: {e}")
     return urls
 
-def load_all_urls() -> List[str]:
+def load_all_urls(base_download_url: str) -> List[str]:
     """Loads all package URLs from the text files in the repository directory."""
     if not os.path.isdir(REPO_DIR) or not os.listdir(REPO_DIR):
         raise FileNotFoundError(
@@ -43,7 +41,7 @@ def load_all_urls() -> List[str]:
     
     all_urls = []
     for text_file in text_files:
-        all_urls.extend(parse_urls_from_text(text_file))
+        all_urls.extend(parse_urls_from_text(text_file, base_download_url))
     
     if not all_urls:
          raise Exception("No package URLs could be loaded. The repository may be empty or files are unreadable.")
@@ -52,7 +50,7 @@ def load_all_urls() -> List[str]:
     return all_urls
 
 def find_url_of_dependency(dependency_name: str, deb_urls: List[str]) -> str | None:
-    """Finds the best-matching URL for a given package name."""
+    """Finds the best-matching URL for a given package name using version-aware sorting."""
     # Match URLs where the filename part starts with the dependency name.
     # e.g., 'ffmpeg' matches 'ffmpeg_5.1-1_amd64.deb'
     matches = [url for url in deb_urls if url.split('/')[-1].startswith(dependency_name + '_')]
@@ -62,14 +60,27 @@ def find_url_of_dependency(dependency_name: str, deb_urls: List[str]) -> str | N
         matches = [url for url in deb_urls if url.split('/')[-1].split('_')[0] == dependency_name]
 
     if len(matches) > 1:
-        # Sort to get the "highest" version number, assuming lexicographical order works.
-        matches.sort(reverse=True)
-        print(f"Warning: Multiple matches found for '{dependency_name}'. Choosing the highest version: {matches[0].split('/')[-1]}")
-        return matches[0]
+        # Use a try-except block for robustness in case a filename format is unexpected.
+        try:
+            # Sort using Debian's versioning rules instead of a naive string sort.
+            # The key extracts the version string from the filename (e.g., '6.0-28ubuntu4.1')
+            # and converts it to a Version object for proper comparison.
+            matches.sort(
+                key=lambda url: Version(url.split('/')[-1].split('_')[1]),
+                reverse=True
+            )
+            print(f"Multiple matches found for '{dependency_name}'. Chose: {matches[0].split('/')[-1]}. Instead of: {[match.split('/')[-1] for match in matches[1:]]}")
+            return matches[0]
+        except (IndexError, TypeError) as e:
+            print(f"Warning: Could not parse version for '{dependency_name}'. Defaulting to simple text sort. Error: {e}")
+            matches.sort(reverse=True)
+            return matches[0]
+
     elif not matches:
         print(f"Error: No package file found for dependency '{dependency_name}'. It might be a virtual package.")
         return None
 
+    # If there's only one match, return it directly.
     return matches[0]
 
 def fetch_dependency(dep_name: str, visited: Set[str], deb_urls: List[str]) -> List[str]:
@@ -115,9 +126,7 @@ def fetch_dependency(dep_name: str, visited: Set[str], deb_urls: List[str]) -> L
     return []
 
 def fetch_dependencies_recursive(initial_name: str, visited: Set[str], deb_urls: List[str]):
-    """Recursively fetches a package and all its dependencies."""
-    print(f"\n--- Resolving: {initial_name} ---")
-    
+    """Recursively fetches a package and all its dependencies."""    
     try:
         dependencies = fetch_dependency(initial_name, visited, deb_urls)
         for dep_name in dependencies:
@@ -131,14 +140,19 @@ def fetch_dependencies_recursive(initial_name: str, visited: Set[str], deb_urls:
         # Catch errors from fetch_dependency and report them with context.
         raise Exception(f"Failed during dependency resolution for '{initial_name}': {e}")
 
-
-def main():
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fetch dependencies for given Debian packages.")
-    parser.add_argument('packages', nargs='+', help='List of Debian packages to fetch dependencies for.')
+    parser.add_argument(
+        '--base-url', 
+        type=str, 
+        default='https://archive.ubuntu.com/ubuntu',
+        help='The base URL to the archive where deb packages are downloaded from'
+    )
+    parser.add_argument('--packages', nargs='+', help='List of Debian packages to fetch dependencies for.')
     args = parser.parse_args()
 
     try:
-        deb_urls = load_all_urls()
+        deb_urls = load_all_urls(args.base_url)
         visited_urls = set()
 
         for package_name in args.packages:
@@ -147,8 +161,4 @@ def main():
         print("\nAll dependencies processed.")
 
     except (FileNotFoundError, Exception) as e:
-        print(f"\nCRITICAL ERROR: {e}")
-        # exit(1) # Uncomment to make it a hard failure in scripts
-
-if __name__ == "__main__":
-    main()
+        raise RuntimeError(f"\nCRITICAL ERROR: {e}")
