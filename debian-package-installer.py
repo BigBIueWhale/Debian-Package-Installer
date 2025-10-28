@@ -33,7 +33,7 @@ def load_all_urls(base_download_url: str) -> List[str]:
     if not os.path.isdir(REPO_DIR) or not os.listdir(REPO_DIR):
         raise FileNotFoundError(
             f"Repository directory '{REPO_DIR}' not found or is empty.\n"
-            f"Please run 'python update_repository.py' to download package lists first."
+            f"Please run 'python3 update_repository.py' to download package lists first."
         )
     
     print(f"Loading package lists from '{REPO_DIR}'...")
@@ -83,7 +83,7 @@ def find_url_of_dependency(dependency_name: str, deb_urls: List[str]) -> str | N
     # If there's only one match, return it directly.
     return matches[0]
 
-def fetch_dependency(dep_name: str, visited: Set[str], deb_urls: List[str]) -> List[str]:
+def fetch_dependency(dep_name: str, visited: Set[str], deb_urls: List[str], base_urls: List[str]) -> List[str]:
     """Downloads a single dependency .deb file and returns its list of further dependencies."""
     url = find_url_of_dependency(dep_name, deb_urls)
     if not url:
@@ -100,14 +100,23 @@ def fetch_dependency(dep_name: str, visited: Set[str], deb_urls: List[str]) -> L
     if os.path.isfile(file_path):
         print(f"Exists: {file_name} is already downloaded.")
     else:
-        print(f"Downloading: {file_name}")
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            with open(file_path, 'wb') as file:
-                file.write(response.content)
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Error fetching {url}: {e}")
+        relative_path = url[len(base_urls[0]) + 1:]
+        downloaded = False
+        for base in base_urls:
+            try_url = f"{base}/{relative_path}"
+            print(f"Downloading: {file_name} from {try_url}")
+            try:
+                response = requests.get(try_url)
+                response.raise_for_status()
+                with open(file_path, 'wb') as file:
+                    file.write(response.content)
+                downloaded = True
+                break
+            except requests.exceptions.RequestException as e:
+                print(f"Failed to fetch from {try_url}: {e}")
+                continue
+        if not downloaded:
+            raise Exception(f"Error fetching {file_name}: not found in any base URL")
 
     try:
         deb = DebFile(file_path)
@@ -125,16 +134,16 @@ def fetch_dependency(dep_name: str, visited: Set[str], deb_urls: List[str]) -> L
     print(f"Info: '{dep_name}' has no further dependencies.")
     return []
 
-def fetch_dependencies_recursive(initial_name: str, visited: Set[str], deb_urls: List[str]):
+def fetch_dependencies_recursive(initial_name: str, visited: Set[str], deb_urls: List[str], base_urls: List[str]):
     """Recursively fetches a package and all its dependencies."""    
     try:
-        dependencies = fetch_dependency(initial_name, visited, deb_urls)
+        dependencies = fetch_dependency(initial_name, visited, deb_urls, base_urls)
         for dep_name in dependencies:
             # Check if we have already processed a package with this name.
             # This is a simple check to avoid infinite recursion on circular dependencies.
             # The `visited` set (with full URLs) is the primary guard.
             if any(initial_name in v for v in visited): 
-                fetch_dependencies_recursive(dep_name, visited, deb_urls)
+                fetch_dependencies_recursive(dep_name, visited, deb_urls, base_urls)
 
     except Exception as e:
         # Catch errors from fetch_dependency and report them with context.
@@ -146,17 +155,18 @@ if __name__ == "__main__":
         '--base-url', 
         type=str, 
         default='https://archive.ubuntu.com/ubuntu',
-        help='The base URL to the archive where deb packages are downloaded from'
+        help='Comma-separated base URLs to the archives where deb packages are downloaded from'
     )
     parser.add_argument('--packages', nargs='+', help='List of Debian packages to fetch dependencies for.')
     args = parser.parse_args()
 
     try:
-        deb_urls = load_all_urls(args.base_url)
+        base_urls = [u.strip() for u in args.base_url.split(',')]
+        deb_urls = load_all_urls(base_urls[0])
         visited_urls = set()
 
         for package_name in args.packages:
-            fetch_dependencies_recursive(package_name, visited_urls, deb_urls)
+            fetch_dependencies_recursive(package_name, visited_urls, deb_urls, base_urls)
         
         print("\nAll dependencies processed.")
 
