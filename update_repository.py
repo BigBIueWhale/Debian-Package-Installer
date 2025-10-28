@@ -3,36 +3,38 @@ import shutil
 import requests
 import gzip
 import argparse
+import lzma
 
 REPO_DIR = './repository'
 
 def setup_repository_dir():
-    """Deletes the old repository directory if it exists and creates a new empty one."""
-    print(f"Setting up fresh repository directory at: {REPO_DIR}")
-    if os.path.exists(REPO_DIR):
-        try:
-            shutil.rmtree(REPO_DIR)
-            print(f"Successfully removed existing directory: {REPO_DIR}")
-        except OSError as e:
-            raise Exception(f"Error removing directory {REPO_DIR}: {e}")
+    """Creates the repository directory if it doesn't exist, or uses the existing one to append new files."""
+    print(f"Setting up repository directory at: {REPO_DIR}")
     
     try:
-        os.makedirs(REPO_DIR)
+        os.makedirs(REPO_DIR, exist_ok=True)
+        if os.path.exists(REPO_DIR):
+            print(f"Existing directory found, will append to it.")
         print(f"Successfully created new directory: {REPO_DIR}")
     except OSError as e:
         raise Exception(f"Error creating directory {REPO_DIR}: {e}")
 
 def download_and_extract(url: str, output_path: str):
-    """Downloads a .gz file, extracts it, and saves it to the output path."""
-    gz_path = os.path.join(REPO_DIR, 'Packages.gz')
-    
+    """Downloads a compressed file (.gz or .xz), extracts it, and saves it to the output path."""
     try:
         print(f"Downloading: {url}")
         response = requests.get(url, timeout=30)
         response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
     except requests.exceptions.HTTPError as e:
-        # It's common for some suite/component combos not to exist (e.g., backports/restricted)
-        if e.response.status_code == 404:
+        if e.response.status_code == 404 and url.endswith('.gz'):
+            url = url[:-3] + '.xz'
+            print(f"Trying alternative format: {url}")
+            try:
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+            except requests.exceptions.RequestException as ex:
+                raise Exception(f"Failed to download {url}: {ex}")
+        elif e.response.status_code == 404:
             print(f"Warning: Not found (404): {url}. Skipping.")
             return
         else:
@@ -40,19 +42,26 @@ def download_and_extract(url: str, output_path: str):
     except requests.exceptions.RequestException as e:
         raise Exception(f"Failed to download {url}: {e}")
 
+    ext = '.xz' if url.endswith('.xz') else '.gz'
+    gz_path = os.path.join(REPO_DIR, 'Packages' + ext)  # Adjust path for extension
     with open(gz_path, 'wb') as f:
         f.write(response.content)
 
     try:
-        with gzip.open(gz_path, 'rb') as f_in:
-            with open(output_path, 'wb') as f_out:
-                shutil.copyfileobj(f_in, f_out)
+        if ext == '.gz':
+            with gzip.open(gz_path, 'rb') as f_in:
+                with open(output_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+        elif ext == '.xz':
+            with lzma.open(gz_path, 'rb') as f_in:
+                with open(output_path, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
         print(f"Extracted and saved to: {output_path}")
     except Exception as e:
         raise Exception(f"Failed to extract {gz_path}: {e}")
     finally:
         if os.path.exists(gz_path):
-            os.remove(gz_path) # Clean up the downloaded .gz file
+            os.remove(gz_path)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -87,10 +96,12 @@ def main():
 
     setup_repository_dir()
 
+    host = args.base_url.split('//')[1].split('/')[0].replace('.', '-')
+
     for suite in args.suites:
         for component in args.components:
             url = f"{args.base_url}/{suite}/{component}/{args.platform}/Packages.gz"
-            output_filename = f"{suite}-{component}-{args.platform}.txt"
+            output_filename = f"{host}-{suite}-{component}-{args.platform}.txt"
             output_path = os.path.join(REPO_DIR, output_filename)
             
             try:
@@ -103,3 +114,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

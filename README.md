@@ -35,7 +35,7 @@ The process is now two steps: first update your local repository index, then dow
 
 **Step 1:** Update the Repository Index
 Before you can download packages, you need to create a local index of available packages. Run the update_repository.py script.
-python update_repository.py
+python3 update_repository.py
 
 This will create a ./repository directory, download the Packages.gz files from the Ubuntu archives, extract them, and save them as .txt files. This step can take a few minutes as it downloads data for multiple Ubuntu suites.
 
@@ -46,7 +46,7 @@ You can customize the sources with command-line arguments:
  * --platform: Change the architecture (e.g., binary-amd64).
 For example (all arguments here are optional, with default values good for newest version of Ubuntu 24.04):
 ```sh
-python update_repository.py --base-url https://us.archive.ubuntu.com/ubuntu/dists --suites jammy noble noble-updates noble-security noble-backports --components main restricted universe multiverse
+python3 update_repository.py --base-url https://us.archive.ubuntu.com/ubuntu/dists --suites jammy noble noble-updates noble-security noble-backports --components main restricted universe multiverse
 ```
 
 **What if my target is not the newest version of Ubuntu 24.04?**:
@@ -67,12 +67,12 @@ user@ubuntu:/etc/apt/sources.list.d$
 Once the repository index is created, use debian-package-installer.py to download a package and all its dependencies.\
 For example (`--base-url` argument is optional, with default value good for newest version of Ubuntu 24.04):
 ```sh
-python debian-package-installer.py --base-url https://archive.ubuntu.com/ubuntu --packages <package_name1> <package_name2> ...
+python3 debian-package-installer.py --base-url https://archive.ubuntu.com/ubuntu --packages <package_name1> <package_name2> ...
 ```
 
 **Example:** To download ffmpeg and all packages it depends on:
 ```sh
-python debian-package-installer.py ffmpeg
+python3 debian-package-installer.py ffmpeg
 ```
 
 The script will read the index files from the [./repository/](./repository/) directory, resolve the entire dependency tree, and download all required .deb files into the [./downloaded/](./downloaded/) directory.
@@ -82,6 +82,42 @@ Directory Structure:
  * [debian-package-installer.py](debian-package-installer.py): Script to download a package and its dependencies.
  * [./repository/](./repository/): Directory created by update_repository.py to store the processed package index files.
  * [./downloaded/](./downloaded/): The default output directory where all downloaded .deb packages are stored.
+
+
+**Raspberry Pi OS Example**
+
+This repo is even more important for Raspberry Pi, because now it means that you don't need a physical online Raspberry Pi to download repos for a Raspberry Pi.
+
+Example system info:
+```txt
+Raspberry Pi System Overview:
+
+- Device: Raspberry Pi
+- OS: Raspberry Pi OS (Bookworm, based on Debian 12)
+- Edition: Desktop (Standard)
+  - Confirmation:
+    - raspberrypi-ui-mods package is installed
+    - LibreOffice is not installed (Full edition apps are absent)
+- Desktop Environment: Labwc (Wayland-based, using wlroots backend)
+- Kernel: Linux 6.12.25-rpt-rpi-2712 #1 SPM PREEMPT Debian 1:6.12.25-1+rpt1 (2025-04-30)
+- Architecture: ARM 64-bit (aarch64)
+- GUI: Installed and active (not Lite)
+- Base Distribution: Debian (as indicated by HOME_URL="https://www.debian.org/")
+- Hostname: raspberrypi
+- APT Repositories:
+  - deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware
+  - deb http://deb.debian.org/debian-security/ bookworm-security main contrib non-free non-free-firmware
+  - deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware
+  - deb http://archive.raspberrypi.com/debian/ bookworm main
+```
+
+```sh
+rm -rf ./repository
+python3 update_repository.py --base-url http://deb.debian.org/debian/dists --suites bookworm bookworm-updates --components main contrib non-free non-free-firmware --platform binary-arm64
+python3 update_repository.py --base-url http://deb.debian.org/debian-security/dists --suites bookworm-security --components main contrib non-free non-free-firmware --platform binary-arm64
+python3 update_repository.py --base-url http://archive.raspberrypi.com/debian/dists --suites bookworm --components main --platform binary-arm64
+python3 debian-package-installer.py --base-url http://archive.raspberrypi.com/debian,http://deb.debian.org/debian,http://deb.debian.org/debian-security --packages ffmpeg
+```
 
 ## How It Works
  1. update_repository.py connects to the Ubuntu archive, downloads the Packages.gz index for each specified suite and component, extracts it, and saves it as a uniquely named text file in the repository/ folder.
