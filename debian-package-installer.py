@@ -206,37 +206,24 @@ def _extract_target_arch_from_repo_filename(filename: str) -> str:
     """
     update_repository.py names files like:
         {host}-{suite}-{component}-{platform}.txt
-    where {platform} is something like "binary-arm64".
+    where {platform} is 'binary-<arch>' (e.g. 'binary-arm64').
 
-    We need the *target* arch for resolution (e.g. arm64 for Raspberry Pi),
-    and we explicitly DO NOT care about the arch of the machine running this script.
-
-    We derive arch from the tail segment "binary-<arch>".
-    If we find conflicting arches between files, that's a fatal error. We do not
-    attempt multi-arch download sets here because that is out of scope of this tool.
+    The host itself may contain '-' (e.g. 'deb-debian-org'), so we must NOT
+    rely on naive split() and taking the last segment. Instead, detect a tail
+    of the form '-binary-<arch>' in the stem.
     """
     base = os.path.basename(filename)
     if not base.endswith('.txt'):
         raise RuntimeError(f"Internal error: expected .txt repo file, got {filename!r}")
     stem = base[:-4]  # drop .txt
-    parts = stem.split('-')
-    if len(parts) < 2:
+
+    m = re.search(r'(?:^|-)binary-([a-z0-9][a-z0-9+.-]*)$', stem)
+    if not m:
         raise RuntimeError(
             f"Cannot parse target arch from repository file name {filename!r}: "
-            f"expected at least 2 '-' segments."
+            f"expected the pattern '*-binary-<arch>.txt'."
         )
-    platform = parts[-1]  # "binary-arm64"
-    if not platform.startswith("binary-"):
-        raise RuntimeError(
-            f"Cannot parse target arch from repository file name {filename!r}: "
-            f"expected last segment like 'binary-<arch>', got {platform!r}"
-        )
-    arch = platform[len("binary-"):]
-    if not arch:
-        raise RuntimeError(
-            f"Cannot parse target arch from repository file name {filename!r}: "
-            f"arch string after 'binary-' was empty."
-        )
+    arch = m.group(1)
     return arch
 
 
@@ -283,19 +270,27 @@ def build_package_index(repo_dir: str) -> Tuple[Dict[str, List[PackageRecord]], 
         #   output_filename = f"{host}-{suite}-{component}-{args.platform}.txt"
         basefile = os.path.basename(txt_path)
         stem = basefile[:-4]
-        parts = stem.split('-')
-        if len(parts) < 4:
-            # We refuse to silently proceed because choosing between multiple suites later
-            # depends on knowing where something came from.
+
+        # Split from the RIGHT, because host can contain '-'s.
+        pre, _sep, platform_hint = stem.rpartition('-')
+        if not _sep:
             raise RuntimeError(
                 f"Repository file name {basefile!r} does not match expected pattern "
-                f"'<host>-<suite>-<component>-<platform>.txt'. "
-                f"This breaks suite/component attribution logic."
+                f"'<host>-<suite>-<component>-<platform>.txt'."
             )
-        host_hint = parts[0]
-        suite_hint = parts[1]
-        component_hint = parts[2]
-        platform_hint = "-".join(parts[3:])  # including dashed leftovers if any
+        pre2, _sep, component_hint = pre.rpartition('-')
+        if not _sep:
+            raise RuntimeError(
+                f"Repository file name {basefile!r} does not match expected pattern "
+                f"'<host>-<suite>-<component>-<platform>.txt'."
+            )
+        host_hint, _sep, suite_hint = pre2.rpartition('-')
+        if not _sep:
+            raise RuntimeError(
+                f"Repository file name {basefile!r} does not match expected pattern "
+                f"'<host>-<suite>-<component>-<platform>.txt'."
+            )
+
         source_hint = f"{host_hint}/{suite_hint}/{component_hint}/{platform_hint}"
 
         arch_from_file = _extract_target_arch_from_repo_filename(basefile)
