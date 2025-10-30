@@ -127,7 +127,9 @@ def _parse_stanzas_from_file(path: str) -> List[Dict[str, str]]:
     current: Dict[str, str] = {}
 
     try:
-        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+        # We must decode strictly; silent replacement would hide corrupted or
+        # incorrectly encoded repository files and undermine correctness.
+        with open(path, 'r', encoding='utf-8', errors='strict') as f:
             for raw_line in f:
                 line = raw_line.rstrip('\n')
                 if line == "":
@@ -163,6 +165,9 @@ def _parse_stanzas_from_file(path: str) -> List[Dict[str, str]]:
                 stanzas.append(current)
     except FileNotFoundError:
         raise RuntimeError(f"Repository file not found while parsing: {path}")
+    except UnicodeDecodeError as e:
+        # Fail loudly on encoding problems; this indicates a broken or unexpected file.
+        raise RuntimeError(f"Error parsing repository file {path}: UTF-8 decoding failed: {e}")
     except Exception as e:
         raise RuntimeError(f"Error parsing repository file {path}: {e}")
 
@@ -456,7 +461,7 @@ def _parse_single_dep_atom(atom_raw: str) -> DepAtom:
       - <archqual> can be:
             "any"     -> means any arch satisfying multiarch rules.
                          We implement the project policy: keep only target arch + 'all'.
-            "native"  -> means native arch of the build.
+            "native"  -> means the native arch of the build.
                          For us, "native" == target arch we're resolving for.
             <literal arch> like "arm64", "amd64"
       - version constraint is like "(>= 1.2)" or "(= 3:1-2)" etc.
@@ -600,16 +605,14 @@ def _provided_version_satisfies(
     Rules we enforce here:
       - If no version constraint was requested, it's fine.
       - If provider declared a Provides version for that virtual, compare that.
-      - Else (no declared Provides version), fall back to provider_pkg.version.
-        This is *slightly* looser than dpkg semantics for versioned Provides,
-        but it's still defensible for "offline downloader" because:
-         * If it's too loose, downstream install might fail loudly at dpkg time,
-           which is fine (better than silently skipping downloads).
-         * If we were stricter, we'd sometimes refuse to download a package that
-           would in practice work fine.
+      - Else (no declared Provides version) and the dependency is versioned,
+        we treat this as UNSATISFIABLE and raise a detailed exception instead of
+        falling back to the provider's own package version. This matches dpkg/apt
+        expectations that a versioned virtual must be satisfied by a provider that
+        explicitly declares a version for that virtual.
 
     We intentionally DO NOT silently ignore version constraints: if we can't meet
-    them and we don't think the fallback version is acceptable, we return False.
+    them under these rules, we raise with context to make it debuggable.
     """
     if op is None or needed_version is None:
         return True
@@ -618,8 +621,16 @@ def _provided_version_satisfies(
     if declared_ver:
         return _version_satisfies(declared_ver, op, needed_version)
 
-    # fallback: use the provider's own Version
-    return _version_satisfies(provider_pkg.version, op, needed_version)
+    # No declared Provides version for a versioned virtual: refuse and explain.
+    raise RuntimeError(
+        "Versioned virtual dependency cannot be satisfied: "
+        f"requested '{virtual_name} {op} {needed_version}', but provider "
+        f"'{provider_pkg.name} {provider_pkg.version} ({provider_pkg.arch})' "
+        "does not declare a version for that virtual in its Provides field. "
+        "Falling back to the provider's package version would be incorrect; "
+        "this is blocked intentionally to avoid producing a download set that "
+        "apt/dpkg would later reject."
+    )
 
 
 ##############################################################################
@@ -743,7 +754,7 @@ def resolve_single_atom(
        We also check versioned-Provides:
          If the dep said "foo (>= 1.2)", and provider had "Provides: foo (=1.5)",
          that should count. If provider didn't specify a Provides version, we
-         fall back to comparing provider's own Version as a heuristic.
+         do NOT fall back to the provider's own Version; we raise instead.
 
        If we get MORE THAN ONE suitable provider, we still choose the newest
        (see _select_best_candidate). This is consistent with our "newest wins"
@@ -785,6 +796,7 @@ def resolve_single_atom(
     for provider in provides_index.get(atom.name, []):
         if provider.arch not in candidate_arches:
             continue
+        # _provided_version_satisfies may raise for versioned virtuals without declared version
         if not _provided_version_satisfies(provider, atom.name, atom.op, atom.ver):
             continue
         provider_matches.append(provider)
@@ -990,7 +1002,6 @@ def fetch_dependencies_recursive(
     pkgs_by_name: Dict[str, List[PackageRecord]],
     provides_index: Dict[str, List[PackageRecord]],
     base_urls: List[str],
-    visited_filenames: Set[str],
     visited_pkgkeys: Set[Tuple[str, str, str]],
 ):
     """
@@ -1003,10 +1014,9 @@ def fetch_dependencies_recursive(
       2. Download that .deb, read its dependencies, and recurse into each dep group.
          Each group may contain alternatives A | B | C. We must choose ONE.
 
-    We guard against infinite recursion using TWO sets:
+    We guard against infinite recursion using ONE set:
       - visited_pkgkeys: {(name, version, arch)} prevents rewalking a package
         even if referenced again via different virtual names.
-      - visited_filenames: {absolute_url_or_filename} prevents redownloading the same .deb.
 
     NOTE: We do NOT silently skip unresolved deps. If resolution fails for ANY dep,
     we raise immediately with a message that names that dep. This is intentional:
@@ -1041,9 +1051,6 @@ def fetch_dependencies_recursive(
 
         # Step 2: download + get dependencies (from actual .deb for correctness)
         dep_groups = _process_package_and_get_deps(pkg, base_urls)
-
-        # also mark downloaded filename as visited
-        visited_filenames.add(pkg.filename)
 
         # Step 3: resolve each dependency group and push onto stack
         for alt_group in dep_groups:
@@ -1100,7 +1107,6 @@ if __name__ == "__main__":
             "No packages specified. Use --packages <pkg1> <pkg2> ..."
         )
 
-    visited_filenames: Set[str] = set()
     visited_pkgkeys: Set[Tuple[str, str, str]] = set()
 
     # For each requested top-level package, resolve + download full transitive deps.
@@ -1112,7 +1118,6 @@ if __name__ == "__main__":
                 pkgs_by_name,
                 provides_index,
                 base_urls,
-                visited_filenames,
                 visited_pkgkeys,
             )
         except Exception as e:
